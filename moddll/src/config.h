@@ -12,6 +12,16 @@ struct ModConfig
     float inputDeadzone = 0.15f;        // ignored for keyboard now; kept for future gamepad support
     float runSpeedMultiplier = 1.6f;    // matches original "A + direction" run modifier
 
+    // Camera-relative movement hook (Player_ReadControls). Angles are game
+    // units: 1024 = 360 degrees. Stock turn-while-moving rates are 12-36
+    // (walk) and 14-42 (run) per frame.
+    int maxSteerWalk = 36;              // max yaw change per frame while walking
+    int maxSteerRun = 42;               // max yaw change per frame while running
+    float pivotThresholdDeg = 90.0f;    // standing + heading error above this = turn on the spot first
+    int cameraYawOffset = 0;            // added to camera yaw (use 512 if "up" walks toward the camera)
+    bool invertSteer = false;           // swap left/right if they come out mirrored
+    bool steerWithTurnBit = true;       // also set cmd bit 2/4 while steering, like stock Up+Left (0xA)
+
     // Debug / iteration
     bool showDebugConsole = true;
     bool verboseLogging = false;

@@ -124,14 +124,21 @@ void Config_Load(HMODULE moduleHandle)
     cfg.turnSpeedDegPerSec = GetFloat(values, "turn_speed_deg_per_sec", cfg.turnSpeedDegPerSec);
     cfg.inputDeadzone = GetFloat(values, "input_deadzone", cfg.inputDeadzone);
     cfg.runSpeedMultiplier = GetFloat(values, "run_speed_multiplier", cfg.runSpeedMultiplier);
+    cfg.maxSteerWalk = GetInt(values, "max_steer_walk", cfg.maxSteerWalk);
+    cfg.maxSteerRun = GetInt(values, "max_steer_run", cfg.maxSteerRun);
+    cfg.pivotThresholdDeg = GetFloat(values, "pivot_threshold_deg", cfg.pivotThresholdDeg);
+    cfg.cameraYawOffset = GetInt(values, "camera_yaw_offset", cfg.cameraYawOffset);
+    cfg.invertSteer = GetBool(values, "invert_steer", cfg.invertSteer);
+    cfg.steerWithTurnBit = GetBool(values, "steer_with_turn_bit", cfg.steerWithTurnBit);
     cfg.showDebugConsole = GetBool(values, "show_debug_console", cfg.showDebugConsole);
     cfg.verboseLogging = GetBool(values, "verbose_logging", cfg.verboseLogging);
     cfg.reloadHotkeyVk = GetInt(values, "reload_hotkey_vk", cfg.reloadHotkeyVk);
     cfg.toggleModHotkeyVk = GetInt(values, "toggle_mod_hotkey_vk", cfg.toggleModHotkeyVk);
 
     g_config = cfg;
-    Log("[config] loaded from %s (turn_speed=%.1f run_mult=%.2f)",
-        path.c_str(), g_config.turnSpeedDegPerSec, g_config.runSpeedMultiplier);
+    Log("[config] loaded from %s (steer walk=%d run=%d pivot=%.0fdeg cam_offset=%d invert=%d turn_bit=%d)",
+        path.c_str(), g_config.maxSteerWalk, g_config.maxSteerRun, g_config.pivotThresholdDeg,
+        g_config.cameraYawOffset, g_config.invertSteer ? 1 : 0, g_config.steerWithTurnBit ? 1 : 0);
 }
 
 const ModConfig& Config_Get()

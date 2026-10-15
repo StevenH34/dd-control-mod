@@ -1,5 +1,6 @@
 #include "hooks.h"
 #include "console.h"
+#include "movement.h"
 
 #include <MinHook.h>
 #include <atomic>
@@ -17,14 +18,15 @@ void Hooks_Init()
         Log("[hooks] MH_Initialize failed: %s", MH_StatusToString(status));
         return;
     }
-    Log("[hooks] MinHook initialized (no hooks installed yet - Phase 1 discovery pending)");
+    Log("[hooks] MinHook initialized");
 
-    // Phase 3+: MH_CreateHook(target, detour, &original) + MH_EnableHook(target) go here,
-    // once addresses are confirmed via Ghidra + x32dbg.
+    if (!Movement_InstallHook())
+        Log("[hooks] movement hook failed - game keeps stock tank controls");
 }
 
 void Hooks_Shutdown()
 {
+    MH_DisableHook(MH_ALL_HOOKS);
     MH_STATUS status = MH_Uninitialize();
     if (status != MH_OK)
         Log("[hooks] MH_Uninitialize failed: %s", MH_StatusToString(status));

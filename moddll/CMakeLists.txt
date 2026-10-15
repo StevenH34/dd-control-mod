@@ -3,6 +3,7 @@ add_library(ddmodcore SHARED
     src/console.cpp
     src/config.cpp
     src/hooks.cpp
+    src/movement.cpp
 )
 
 target_include_directories(ddmodcore PRIVATE src)

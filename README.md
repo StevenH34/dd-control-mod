@@ -2,16 +2,29 @@
 
 Runtime patch for Deathtrap Dungeon (1998, GoG release) that replaces its
 tank controls with camera-relative modern 3D controls. See
-`C:\dev\claude-files\DD\PROJECT-DD-PATHC.md` and the plan this project was
-scaffolded from for full background.
+`docs/PROJECT-DD-PATHC.md` for background and tool paths.
 
-Status: **Phase 0 scaffolding done, Phase 1 discovery started.** No hooks
-are installed yet — the mod DLL loads, opens a debug console, loads config,
-and does nothing to game behavior. See "Phase 1 findings so far" below for
-what static analysis has turned up; the remaining Phase 1 work needs x32dbg.
+Status: **RE done and runtime-verified (see
+`docs/RE-CONTROLS-CAMERA.md`). First hook written:
+camera-relative movement via `Player_ReadControls`. It builds but has not
+been tested in-game yet.** Camera changes come later. The "Phase 1 findings
+so far" section at the bottom is the early discovery log and is out of date.
 
 ## Layout
 
+This repo (`C:\dev\DD-mod`) holds everything that's versioned. Large or
+generated RE data stays outside it:
+
+- Ghidra project (annotated, current): `C:\dev\ghidra-projects\DD-REA`
+  (`DeathtrapDungeon.gpr`). The old pre-REA project in
+  `C:\dev\ghidra-projects\DD` is kept but no longer used.
+- REA output: `C:\dev\rea-projects\DD\results`.
+
+In the repo:
+
+- `docs/` — `RE-CONTROLS-CAMERA.md` (addresses, struct offsets, runtime
+  verification) and `PROJECT-DD-PATHC.md` (project goal, game and tool
+  paths).
 - `moddll/` — `DDModCore.dll`, injected into `DD_CD.EXE`. All control-remap
   logic will live here (Phase 3+).
 - `injector/` — `DDModInjector.exe`, a small standalone tool that waits for
@@ -21,7 +34,9 @@ what static analysis has turned up; the remaining Phase 1 work needs x32dbg.
   known.
 - `ghidra_scripts/` — Ghidra scripts to assist RE discovery. Run these from
   Ghidra's Script Manager (or headless) against the `DUNGEON.DLL` program in
-  the `DeathtrapDungeon` project at `C:\dev\ghidra-projects\DD`.
+  the `DeathtrapDungeon` project at `C:\dev\ghidra-projects\DD-REA`.
+  `ApplyControlsCameraNames.java` applies the names from
+  `docs/RE-CONTROLS-CAMERA.md`.
 
 ## Building
 
@@ -51,6 +66,84 @@ on first run. In-game hotkeys (configurable in the ini):
 - `F9` — reload the ini without restarting
 - `F10` — toggle the mod on/off (falls back to stock tank controls)
 
+## Movement hook (`moddll/src/movement.cpp`)
+
+Hooks `Player_ReadControls` (`DUNGEON.DLL` + `0x871b0`, `void __cdecl(actor)`)
+with MinHook. `Hooks_Init` waits up to 120 s for `DUNGEON.DLL`, computes
+every address from the module base (the game normally loads it at
+`0x10000000`), and logs `[move] ... hook installed` to the debug console.
+
+Each frame the detour calls the original, then rewrites the movement part
+of the command word `*(actor+0x114)+0x144` and the turn rate at `+0x148`:
+
+1. **Pass through (stock behavior)** in any of these cases: F10 has disabled
+   the mod; the original bailed out early (`0x1008f920` nonzero); the game is
+   in first person (`0x1002f920`); or the stock word already has a jump,
+   attack, parry, ranged or spell bit (`0x1F7F000`). The default bindings
+   for those share the arrow keys (CAPS+arrow, ENTER+arrow), so they keep
+   their tank-relative meaning.
+2. **Read intent** with `Action_Value` (`0x1005dd00`): forward = max(1, 3),
+   back = max(2, 4), left = max(9, 0xb), right = max(10, 0xc). Run = any of
+   3, 4, 0xb, 0xc (that is, A held with an arrow).
+3. **Target heading** = camera yaw (`*(*(*0x101f11c0+0x10)+0x1c)`) +
+   `camera_yaw_offset` + input angle (forward 0, right +256, back 512;
+   1024 = 360 degrees). The error is the shortest signed difference to the
+   player yaw `*(*(actor+0x2c)+0x10) & 0x3ff`.
+4. **Rewrite**: clear bits `2,4,8,0x10,0x20,0x40,0x100,0x200,0x800`, then:
+   - *pivot*: if we didn't emit walk/run last frame and |error| is above
+     `pivot_threshold_deg`, emit turn bit `2` (`4` when running) with a turn
+     rate whose sign picks the direction, and no walk bit.
+   - *move*: otherwise emit walk `8` (run: `0x28`, the same as stock A+Up)
+     and set the turn rate to the error clamped to ±`max_steer_walk` or
+     ±`max_steer_run`. With `steer_with_turn_bit = 1` it also sets bit `2`/`4`
+     while the rate is nonzero. Turning while moving was only ever observed
+     with that bit set (stock `0xA`, `0x2C`).
+
+   Step forward (`0x400`), operate and all action bits are left alone.
+
+New `DDModConfig.ini` keys (all optional; an older ini just uses defaults):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_steer_walk` | 36 | max yaw change per frame while walking (stock 12-36) |
+| `max_steer_run` | 42 | max yaw change per frame while running (stock 14-42) |
+| `pivot_threshold_deg` | 90 | if standing and the error is above this, turn on the spot first |
+| `camera_yaw_offset` | 0 | added to camera yaw; set 512 if Up walks *toward* the camera |
+| `invert_steer` | 0 | set 1 if Left/Right come out mirrored |
+| `steer_with_turn_bit` | 1 | also set turn bit 2/4 while steering (see above) |
+
+With `verbose_logging = 1`, the console prints the state, camera yaw,
+target, player yaw, error, command word and rate every 30 frames. State
+changes (`passthrough`/`idle`/`pivot`/`move`) are always logged.
+
+### Needs in-game testing (none of this has been run in the game yet)
+
+- The hook installs and the game doesn't crash on level load. MinHook has
+  to relocate the prologue at `0x100871b0`, which hasn't been inspected.
+- **Camera yaw convention.** The code assumes the camera transform yaw uses
+  the same "forward = (-sin, -cos)" convention as the actor. If Up walks
+  toward the camera, set `camera_yaw_offset = 512`. If it's off by 90
+  degrees, try 256 or -256.
+- **Left/right sign.** The code assumes a positive rate means turning right,
+  which is true for the stock TURN_RIGHT path. If left and right are
+  mirrored, set `invert_steer = 1`.
+- **Steering without the turn bit.** Try `steer_with_turn_bit = 0` to see
+  whether the turn rate alone steers while walking. If it does, that avoids
+  any side effects of the turn bit, such as turn animations.
+- **Pivot then walk.** Check that it pivots cleanly when the error is over
+  90 degrees, and that a 180-degree reversal while already walking arcs
+  smoothly (it steers there; it doesn't pivot).
+- Whether steering oscillates around the target heading, and whether the
+  per-frame clamps feel right at walk and run speed.
+- **Camera cuts.** Mode 3 makes yaw jumps of ±500. Holding a direction
+  through a cut swings the target heading at once. A later step may need to
+  latch the camera yaw while the input direction is held.
+- Diagonals (Up+Left), and the run key with only Left or Right (A+Left).
+- Z+arrow (sidestep/step) now walks camera-relative; check that it isn't
+  odd.
+- CAPS/ENTER combos (attacks, jumps) still behave as stock.
+- F10 switches back to stock tank controls mid-level without glitches.
+
 ## Ghidra scripts
 
 Note: this Ghidra install does not have PyGhidra (Python) configured —
@@ -78,14 +171,16 @@ directory if it isn't already there).
 Run headless (no GUI) example:
 
 ```
-support\analyzeHeadless.bat C:\dev\ghidra-projects\DD DeathtrapDungeon ^
-  -process DUNGEON.DLL -noanalysis ^
-  -scriptPath C:\dev\ghidra-projects\DD\mod\ghidra_scripts ^
-  -postScript FindInputCandidates.java
+C:\tools\ghidra_12.1.4_PUBLIC\support\analyzeHeadless.bat ^
+  C:\dev\ghidra-projects\DD-REA DeathtrapDungeon ^
+  -process DUNGEON.DLL -noanalysis -readOnly ^
+  -scriptPath C:\dev\DD-mod\ghidra_scripts ^
+  -postScript DecompileAt.java "100871b0"
 ```
 
-(run from the Ghidra install's `support/` directory context, or give the
-full path to `analyzeHeadless.bat`)
+Headless can't open the project while the Ghidra GUI has it open (the
+`.lock` file); close the GUI first. Drop `-readOnly` for scripts that
+should save changes, such as `ApplyControlsCameraNames.java`.
 
 ## Phase 1 findings so far (static analysis only)
 
