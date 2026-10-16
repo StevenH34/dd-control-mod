@@ -1,3 +1,4 @@
 build/
 *.log
 DDModConfig.ini
+__pycache__/

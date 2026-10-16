@@ -10,8 +10,8 @@ tank controls with camera-relative modern 3D controls. See
 Status: **RE done and runtime-verified (see
 `docs/RE-CONTROLS-CAMERA.md`). First hook written:
 camera-relative movement via `Player_ReadControls`. It builds but has not
-been tested in-game yet.** Camera changes come later. The "Phase 1 findings
-so far" section at the bottom is the early discovery log and is out of date.
+been tested in-game yet.** Camera changes come later. The RE discovery log,
+including the out-of-date Phase 1 findings, is in `docs/RE-FINDINGS.md`.
 
 ## Supported game version
 
@@ -41,8 +41,9 @@ game-derived RE data stays outside it:
 In the repo:
 
 - `docs/` — `RE-CONTROLS-CAMERA.md` (addresses, struct offsets, runtime
-  verification) and `PROJECT-DD-PATHC.md` (project goal, game and tool
-  paths).
+  verification), `RE-FINDINGS.md` (running log of RE findings, including
+  dead ends), `PROJECT-DD-PATHC.md` (project goal, game and tool paths),
+  `symbols.json` (Ghidra names and comments) and `rea/` (REA reports).
 - `moddll/` — `DDModCore.dll`, injected into `DD_CD.EXE`. All control-remap
   logic will live here (Phase 3+).
 - `injector/` — `DDModInjector.exe`, a small standalone tool that waits for
@@ -50,11 +51,10 @@ In the repo:
 - `third_party/minhook/` — vendored [MinHook](https://github.com/TsudaKageyu/minhook)
   (BSD 2-clause), used for inline function hooks once target addresses are
   known.
-- `ghidra_scripts/` — Ghidra scripts to assist RE discovery. Run these from
-  Ghidra's Script Manager (or headless) against the `DUNGEON.DLL` program in
-  the `DeathtrapDungeon` Ghidra project.
-  `ApplyControlsCameraNames.java` applies the names from
-  `docs/RE-CONTROLS-CAMERA.md`.
+- `ghidra_scripts/` — Ghidra scripts for RE work. Run these from Ghidra's
+  Script Manager (or headless) against the `DUNGEON.DLL` program in the
+  `DeathtrapDungeon` Ghidra project. `ImportSymbols.py` applies the names and
+  comments in `docs/symbols.json`.
 
 ## Building
 
@@ -187,24 +187,25 @@ now fixed in code. Still to check:
 
 ## Ghidra scripts
 
-Note: this Ghidra install does not have PyGhidra (Python) configured —
-headless runs fail with "Ghidra was not started with PyGhidra" — so these
-are plain Java `GhidraScript`s instead. They also run fine from the GUI
-Script Manager (Window > Script Manager > add `ghidra_scripts` as a script
-directory if it isn't already there).
+`DecompileAt.java` runs in any Ghidra. The `.py` scripts are Python 3 and
+need PyGhidra (see below). All of them run from the GUI Script Manager
+(Window > Script Manager > add `ghidra_scripts` as a script directory if it
+isn't already there).
 
-- `FindInputCandidates.java` — lists all call sites of
-  `GetAsyncKeyState`/`GetKeyState`/`GetKeyboardState` and bookmarks them
-  (`DD-INPUT-CANDIDATE`). Found **zero** hits in `DUNGEON.DLL` — the game
-  does not poll the keyboard this way.
-- `ListImports.java` — dumps every imported symbol name for the active
-  program. Used to confirm `DUNGEON.DLL` imports `DirectInputCreateA` (and
-  not `DirectInput8Create`/`DirectInputCreateW`), while `DD_CD.EXE` imports
-  neither — input setup lives entirely in `DUNGEON.DLL`.
-- `FindDirectInputUsage.java` — bookmarks `DirectInputCreateA` call sites
-  (`DD-DINPUT-CANDIDATE`) and the Win32 message-pump calls
-  `PeekMessageA`/`DispatchMessageA`/`TranslateMessage`/`MapVirtualKeyA`
-  (`DD-MSGLOOP-CANDIDATE`).
+- `ExportSymbols.py [output]` — writes the function names, labels and
+  comments you added to `docs/symbols.json` (one entry per line, so diffs
+  stay readable). Only user-defined names are exported, never code or
+  bytes, so the file is safe to publish. Comments Ghidra adds by itself
+  (Function ID "Library Function" matches, PE import/export and header
+  comments) are skipped, since Ghidra recreates them; pass `all` to keep
+  them. Review the file before committing anyway.
+- `ImportSymbols.py [input] [force]` — applies `docs/symbols.json` back to a
+  program. Creates missing functions, replaces comments of the same type at
+  the same address, and is safe to re-run. It refuses to run if the file's
+  SHA-256 doesn't match the program (wrong game build) unless you pass
+  `force`. Together with `ExportSymbols.py`, this lets anyone with the game
+  rebuild the annotated project without the Ghidra database being shared.
+  It replaces the old hard-coded `ApplyControlsCameraNames.java`.
 - `DecompileAt.java <addr1,addr2,...>` — prints decompiled C for the
   function(s) at the given address(es). Takes addresses as a script arg,
   e.g. `-postScript DecompileAt.java "100a9de8,10074860"`.
@@ -222,34 +223,44 @@ Ghidra install, your Ghidra project folder and this repo:
 
 Headless can't open the project while the Ghidra GUI has it open (the
 `.lock` file); close the GUI first. Drop `-readOnly` for scripts that
-should save changes, such as `ApplyControlsCameraNames.java`.
+should save changes, such as `ImportSymbols.py`.
 
-## Phase 1 findings so far (static analysis only)
+The Phase 1 discovery scripts (`FindInputCandidates.java`,
+`ListImports.java`, `FindDirectInputUsage.java`) were removed once their
+results were recorded in `docs/RE-FINDINGS.md`. They're still in the git
+history.
 
-- **No keyboard polling.** `DUNGEON.DLL` never calls `GetAsyncKeyState`,
-  `GetKeyState`, or `GetKeyboardState`.
-- **DirectInput confirmed.** `DUNGEON.DLL` imports `DirectInputCreateA`.
-  Static xref search only finds the import thunk itself (address
-  `100a9de8`, which Ghidra couldn't fully resolve — "could not recover
-  jumptable, too many branches" — and is just a forwarding stub, not real
-  game code) — no other static caller was found. This is the expected
-  limit of static analysis here: the actual per-frame input read is a COM
-  vtable call (`IDirectInputDevice::GetDeviceState`/`GetDeviceData`), which
-  isn't a named import and won't show up in an import-xref search.
-- **Message pump is a dead end for input.** The two functions with the most
-  `PeekMessageA`/`DispatchMessageA`/`TranslateMessage` calls turned out to
-  be: `FUN_10074860` — the FMV/cutscene movie player bootstrap (references
-  `C:\Asylum\Movies\...` paths, calls `Player_InitVideoSystem` /
-  `Player_InitMovie` / etc. — this is intro-video playback, unrelated to
-  gameplay input) — and `FUN_10050ae0` — a generic idle/busy message-pump
-  helper (`WaitMessage`+`PeekMessage` loop gated on a global flag), which
-  just keeps the window responsive and is not where movement input is read.
-- **Next step needs x32dbg.** Since the real input read is an indirect
-  vtable call, find it dynamically: breakpoint `DirectInputCreateA` (x32dbg
-  resolves this fine even though Ghidra's static search couldn't find the
-  caller), step out to get the `IDirectInput7A*` return value, follow its
-  `CreateDevice` call (vtable slot) to get the `IDirectInputDevice2A*` for
-  the keyboard device, then breakpoint that device's `GetDeviceState` (or
-  `GetDeviceData`) vtable slot. Every frame's break there, with the return
-  address, is the real caller — that's the Phase 1 target function to
-  import into Ghidra and reverse for the player-transform update.
+### PyGhidra (Python 3 scripts)
+
+PyGhidra ships with Ghidra (11.2 and later). It runs real CPython 3 in the
+same process as Ghidra, so `.py` scripts get the full Ghidra API and normal
+Python packages.
+
+1. Install a 64-bit Python 3.9–3.14. This project uses **3.14**, tested
+   with Ghidra 12.1.4. Ghidra bundles a ready-made JPype only for 3.9–3.13,
+   so on 3.14 pip builds JPype from source during the first run. That
+   takes a minute and needs the MSVC x64 C++ toolset (Visual Studio Build
+   Tools, "Desktop development with C++"), which you already have if you
+   build the mod. Without a C++ compiler, use 3.13 instead.
+2. Start Ghidra with `<ghidra install>\support\pyghidraRun.bat` instead of
+   `ghidraRun.bat`. The first run looks for a supported Python, offers to
+   create a virtual environment in your Ghidra user settings folder (not in
+   this repo), and installs PyGhidra into it from Ghidra's bundled wheels
+   (no internet needed). Later runs reuse it.
+3. Use the Script Manager as usual; the `.py` scripts carry
+   `@runtime PyGhidra`. Window > PyGhidra opens a Python 3 console.
+
+Headless, use `pyghidraRun.bat -H` with the usual `analyzeHeadless`
+arguments:
+
+```
+<ghidra install>\support\pyghidraRun.bat -H ^
+  <ghidra projects>\DD-REA DeathtrapDungeon ^
+  -process DUNGEON.DLL -noanalysis -readOnly ^
+  -scriptPath <this repo>\ghidra_scripts ^
+  -postScript ExportSymbols.py
+```
+
+If the launcher picks the wrong Python, it remembers the last one it used.
+Delete the `venv` folder in your Ghidra user settings directory to make it
+ask again.
