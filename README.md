@@ -1,6 +1,9 @@
-# DD Modern Controls
+# Deathtrap Dungeon Modern Controls
 
-Runtime patch for Deathtrap Dungeon (1998, GoG release) that replaces its
+This is a purely experimental repo I wanted to create to test the functionality Reverse Engineer Anything ([REA](https://github.com/morluto/rea)). I've long had the idea of taking an older game and upating the control scheme through reverse engineering. As anyone who's attempted decompiling a game through Ghidra would  know, this is a very complex process. To my surprise, Claude and REA were able to find the code for player controls and the camera. Things aren't perfect right now, this is still a work-in-progres, but this is a great start. Hopefully with some time I can figure out a solution and use this information in the future to patch other games.
+
+
+Goal: Runtime patch for Deathtrap Dungeon (1998, GoG release) that replaces its
 tank controls with camera-relative modern 3D controls. See
 `docs/PROJECT-DD-PATHC.md` for background and tool paths.
 
