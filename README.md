@@ -187,11 +187,26 @@ now fixed in code. Still to check:
 
 ## Ghidra scripts
 
-Note: this Ghidra install does not have PyGhidra (Python) configured —
-headless runs fail with "Ghidra was not started with PyGhidra" — so these
-are plain Java `GhidraScript`s instead. They also run fine from the GUI
-Script Manager (Window > Script Manager > add `ghidra_scripts` as a script
-directory if it isn't already there).
+The `.java` scripts run in any Ghidra. The `.py` scripts are Python 3 and
+need PyGhidra (see below). All of them run from the GUI Script Manager
+(Window > Script Manager > add `ghidra_scripts` as a script directory if it
+isn't already there).
+
+- `ExportSymbols.py [output]` — writes the function names, labels and
+  comments you added to `docs/symbols.json` (one entry per line, so diffs
+  stay readable). Only user-defined names are exported, never code or
+  bytes, so the file is safe to publish. Comments Ghidra adds by itself
+  (Function ID "Library Function" matches, PE import/export and header
+  comments) are skipped, since Ghidra recreates them; pass `all` to keep
+  them. Review the file before committing anyway.
+- `ImportSymbols.py [input] [force]` — applies `docs/symbols.json` back to a
+  program. Creates missing functions, replaces comments of the same type at
+  the same address, and is safe to re-run. It refuses to run if the file's
+  SHA-256 doesn't match the program (wrong game build) unless you pass
+  `force`. Together with `ExportSymbols.py`, this lets anyone with the game
+  rebuild the annotated project without the Ghidra database being shared.
+- `ApplyControlsCameraNames.java` — the original hard-coded set of
+  controls/camera names from `docs/RE-CONTROLS-CAMERA.md`.
 
 - `FindInputCandidates.java` — lists all call sites of
   `GetAsyncKeyState`/`GetKeyState`/`GetKeyboardState` and bookmarks them
@@ -222,7 +237,43 @@ Ghidra install, your Ghidra project folder and this repo:
 
 Headless can't open the project while the Ghidra GUI has it open (the
 `.lock` file); close the GUI first. Drop `-readOnly` for scripts that
-should save changes, such as `ApplyControlsCameraNames.java`.
+should save changes, such as `ApplyControlsCameraNames.java` and
+`ImportSymbols.py`.
+
+### PyGhidra (Python 3 scripts)
+
+PyGhidra ships with Ghidra (11.2 and later). It runs real CPython 3 in the
+same process as Ghidra, so `.py` scripts get the full Ghidra API and normal
+Python packages.
+
+1. Install a 64-bit Python 3.9–3.14. This project uses **3.14**, tested
+   with Ghidra 12.1.4. Ghidra bundles a ready-made JPype only for 3.9–3.13,
+   so on 3.14 pip builds JPype from source during the first run. That
+   takes a minute and needs the MSVC x64 C++ toolset (Visual Studio Build
+   Tools, "Desktop development with C++"), which you already have if you
+   build the mod. Without a C++ compiler, use 3.13 instead.
+2. Start Ghidra with `<ghidra install>\support\pyghidraRun.bat` instead of
+   `ghidraRun.bat`. The first run looks for a supported Python, offers to
+   create a virtual environment in your Ghidra user settings folder (not in
+   this repo), and installs PyGhidra into it from Ghidra's bundled wheels
+   (no internet needed). Later runs reuse it.
+3. Use the Script Manager as usual; the `.py` scripts carry
+   `@runtime PyGhidra`. Window > PyGhidra opens a Python 3 console.
+
+Headless, use `pyghidraRun.bat -H` with the usual `analyzeHeadless`
+arguments:
+
+```
+<ghidra install>\support\pyghidraRun.bat -H ^
+  <ghidra projects>\DD-REA DeathtrapDungeon ^
+  -process DUNGEON.DLL -noanalysis -readOnly ^
+  -scriptPath <this repo>\ghidra_scripts ^
+  -postScript ExportSymbols.py
+```
+
+If the launcher picks the wrong Python, it remembers the last one it used.
+Delete the `venv` folder in your Ghidra user settings directory to make it
+ask again.
 
 ## Phase 1 findings so far (static analysis only)
 
