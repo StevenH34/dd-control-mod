@@ -1,7 +1,7 @@
 # Deathtrap Dungeon — Controls & Camera (static RE findings)
 
-Target: `C:\GOG Games\Deathtrap Dungeon\DUNGEON.DLL`
-(sha256 `95fe9ce0…7e2d56`, image base `0x10000000`). Analyzed with REA 6.5.0 + Ghidra 12.1.4.
+Target: `<game folder>\DUNGEON.DLL` from the GoG release
+(sha256 `95fe9ce0fff387f00704548f152e4340815213fcb3833dbe1b5c42871e7d2e56`, image base `0x10000000`). Analyzed with REA 6.5.0 + Ghidra 12.1.4.
 
 All of this is **static analysis**. Nothing here has been checked in a debugger
 yet. Names are mine (Ghidra still shows `FUN_xxxxxxxx`). Struct field meanings
@@ -198,3 +198,46 @@ Method: a non-pausing log breakpoint at `0x10087191`, right after the `Player_Re
 - If the heading error is large (say more than 90°) while standing, emit a turn command (`2`/`4`) with the rate's sign to pivot first.
 
 **Not tested:** writing yaw directly while walking. It should be unnecessary given the steering result above.
+
+## 6. Camera yaw convention (static, confirmed by the first mod run, 2026-10-15)
+
+**The camera yaw is 180° off from the actor yaw convention.**
+
+- `0x10030790` (transform write) sets camera pitch and yaw from `0x10030730(camPos, target, &out)`:
+  - `out[1] = 0x100 - atan2g(dx, dz)`, where `(dx, dz) = target - camPos`;
+  - `out[0] = -atan2g(horizontal length, dy)`.
+- `0x10037890 atan2g(x, y)` returns angles in 1024 units, measured from +x toward +y:
+  - `0x10037910` maps y → −y to `0x400 − a`;
+  - `0x10037890` maps x → −x to `−a − 0x200`.
+- So `camYaw = 256 − atan2(dz, dx)`. Under the actor convention (forward = `(−sin, −cos)`), that "forward" is `(−dx, −dz)`: it points from the target back at the camera.
+- **The camera's look direction in actor yaw units is `camYaw + 512`.**
+- Confirmed in game: the first mod build used `camYaw` directly, and Up walked toward the camera while Down walked away from it.
+
+Related:
+- The look-at target `CAM+0x264..0x26c` is the player position (`*CAM+0xfc`, `*CAM+0x104`; y + 100), copied each frame in `0x10030d30`. So the camera-to-player direction can also be computed from the camera transform `[0]`/`[2]` and those pointers.
+- `0x10087160`'s early-out `0x1008f920` returns `[0x101d41c8]`.
+- `0x1005dd00` is `Action_Value`: it returns `0` when the action's status is 1, otherwise the stored value.
+- In fullscreen nGlide, any window that takes focus minimizes the game. The mouse poll `0x10050d50` then loops `GetDeviceState`/`Acquire` forever without pumping messages, so the game hangs (seen on the loading screen).
+
+## 7. Startup and the session loop (static, from the REA reports)
+
+How the launcher gets into the game, and the top-level loop that everything above runs under. The binary overviews and the launcher search are in `docs/rea/`.
+
+- **Launcher:** `DDSTART.EXE` imports `CreateProcessA` and none of `WinExec`/`ShellExecute`, so it starts the game as a separate process. `DD_CD.EXE` then loads `DUNGEON.DLL`.
+- **`Play_Win32_Deathtrap`** (DLL export, ordinal 3, RVA `0x1b510`): the game's entry point.
+  - Saves its 4th and 5th arguments to `0x101f1438` / `0x101f143c`.
+  - Copies the two blocks its first two arguments point to (14 + 103 dwords) into one contiguous local buffer.
+  - Calls `Session_Init(0)`, then `Session_Push(buffer, arg3)`.
+  - Runs `Session_RunAll` until it returns 0 (no sessions left), then calls `Session_Shutdown` and returns 0.
+- **`0x1007ed10 Session_Init(count)`:** allocates a pool named `session_stack` with `count` entries (at least 1) of `0x9ec` bytes each, via `0x10088980`. Pool pointer `0x101d7a90`, list head `0x101d7a94`, ID counter `0x101d7a98` and current session `0x100f8c10` all start at 0.
+- **`0x1007ed80 Session_Push(params, flag)`:** takes an entry from the pool (`0x10088a60`) and puts it at the front of the list.
+  - Links: `+0x9e8` next, `+0x9e4` previous.
+  - `+4` gets the next ID from the counter. The 117-dword (`0x75`) parameter block is copied to `+0x800`.
+  - Sets `+0x9d8 = 0x7fffffff`, flags `+8 = 0x80044`, `+0xc = 0xff`, and installs the callback `0x1007ef70` through `0x1007ef60`.
+  - Flags: always adds `0x20000`, and adds `0x400` when `flag` is 0. Returns the new entry.
+- **`0x1007ee70 Session_RunAll`:** one pass over the list, called once per frame.
+  - For each entry it sets the current session (`0x100f8c10`) and calls the entry's callback at `+0`, if it has one.
+  - If the entry has flag `0x10000` and the global `0x10216440` is 0 (likely "window inactive"), it doesn't run the callback. The first time, it calls `0x10047d80(2,0)` and marks the entry with `0x100000`. Every time, it runs the idle message pump `0x10050ae0`.
+  - When `0x10216440` is set again, it clears `0x100000`, calls `0x1009a030(1)` + `0x1009a1f0` twice and `0x10047d80(4,0)`, then runs the callback.
+  - Returns how many entries it visited.
+- **`0x1007ed60 Session_Shutdown`:** frees the pool (`0x10088a30`) and clears the pool, list head and current-session globals.

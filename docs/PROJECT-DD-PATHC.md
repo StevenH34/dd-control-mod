@@ -23,21 +23,20 @@
 
 # Game Files
 Deathtrap Dungone GoG game file directory:
-- C:\GOG Games\Deathtrap Dungeon
+- `<game folder>` (the GOG install folder)
     - This contains `Dungeon.DLL` - the game code
-- C:\GOG Games\Deathtrap Dungeon\ASYLUM
+- `<game folder>\ASYLUM`
     - This contains `DD_CD.EXE` - files used to launch the game
 
 
 # Tools
 Ghidra:
-- C:\tools\ghidra_12.1.4_PUBLIC
-Ghidra Deathtrap Dungeon project files:
-- C:\dev\ghidra-projects\DD-REA (current, annotated)
-- C:\dev\ghidra-projects\DD (old, pre-REA analysis)
-REA results:
-- C:\dev\rea-projects\DD\results
+- `<ghidra install>` (Ghidra 12.1.4)
+Ghidra Deathtrap Dungeon project files (kept outside this repo):
+- `<ghidra projects>\DD-REA` (current, annotated)
+REA results (kept outside this repo; the small reports are copied into `docs/rea`):
+- `<rea projects>\DD\results`
 Mod code, Ghidra scripts and these docs:
-- C:\dev\DD-mod
+- this repo
 x32dbg:
-- C:\tools\x64bdg_2026-05-27_12-11\release\x32
+- `<x64dbg install>\release\x32`

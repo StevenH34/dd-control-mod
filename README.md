@@ -10,15 +10,30 @@ camera-relative movement via `Player_ReadControls`. It builds but has not
 been tested in-game yet.** Camera changes come later. The "Phase 1 findings
 so far" section at the bottom is the early discovery log and is out of date.
 
+## Supported game version
+
+All addresses in this repo are for the GoG release. Check your files match
+before using the mod (`certutil -hashfile <file> SHA256` in a command prompt):
+
+| File | SHA-256 |
+|------|---------|
+| `DUNGEON.DLL` | `95fe9ce0fff387f00704548f152e4340815213fcb3833dbe1b5c42871e7d2e56` |
+| `ASYLUM\DD_CD.EXE` | `0c644a00e62652e046c5dad2960f0f6c8c1998f4ca065780fbd7811d9908bf1f` |
+| `DDSTART.EXE` | `c45d23a17b29057f33c020f2b5853fd19fbce31b3ccae66af99dc3fd4c0d8dfb` |
+
+`DUNGEON.DLL` is the one that matters: the hooks patch addresses inside it.
+No game files are included in this repo.
+
 ## Layout
 
-This repo (`C:\dev\DD-mod`) holds everything that's versioned. Large or
-generated RE data stays outside it:
+This repo holds everything that's versioned. Large, generated or
+game-derived RE data stays outside it:
 
-- Ghidra project (annotated, current): `C:\dev\ghidra-projects\DD-REA`
-  (`DeathtrapDungeon.gpr`). The old pre-REA project in
-  `C:\dev\ghidra-projects\DD` is kept but no longer used.
-- REA output: `C:\dev\rea-projects\DD\results`.
+- Ghidra project (annotated, current): `<ghidra projects>\DD-REA`
+  (`DeathtrapDungeon.gpr`). It embeds a copy of the game's code, so it is
+  not published.
+- REA output: `<rea projects>\DD\results`. The small reports are copied
+  into `docs/rea/`.
 
 In the repo:
 
@@ -34,14 +49,14 @@ In the repo:
   known.
 - `ghidra_scripts/` — Ghidra scripts to assist RE discovery. Run these from
   Ghidra's Script Manager (or headless) against the `DUNGEON.DLL` program in
-  the `DeathtrapDungeon` project at `C:\dev\ghidra-projects\DD-REA`.
+  the `DeathtrapDungeon` Ghidra project.
   `ApplyControlsCameraNames.java` applies the names from
   `docs/RE-CONTROLS-CAMERA.md`.
 
 ## Building
 
-Requires the MSVC 32-bit toolset (already installed here via VS Build Tools
-2026) and CMake. **Must be configured as a 32-bit (Win32) build** — the game
+Requires the MSVC 32-bit toolset (e.g. from Visual Studio Build Tools) and
+CMake. **Must be configured as a 32-bit (Win32) build** — the game
 is a 32-bit process, so the mod DLL and injector have to match.
 
 ```
@@ -58,8 +73,19 @@ Output binaries land in `build/bin/Debug/`: `DDModCore.dll` and
 2. Start `DDModInjector.exe` (it will wait for the game to launch), *then*
    launch the game via GoG/`DD_CD.EXE` — or launch the game first and start
    the injector within its 30s wait window.
-3. A console window titled "Deathtrap Dungeon - Modern Controls (debug)"
-   should appear, confirming the DLL loaded.
+   - It skips any `DD_CD.EXE` with a debugger attached (for example a
+     leftover x32dbg session). If other instances are already running, it
+     waits for a new one.
+3. Keep the injector window open. The mod writes its log to `DDMod.log` next
+   to `DDModCore.dll`, and the injector prints that file live until the game
+   exits. The first lines confirm the DLL loaded.
+
+**Don't open a window inside the game.** In fullscreen (nGlide), any window
+that takes focus during loading minimizes the game. The game then spins
+forever in its DirectInput mouse re-acquire loop (`0x10050d50`: retries
+`GetDeviceState`/`Acquire` without pumping messages), so it stays stuck on
+the loading screen. That's why the in-game console (`show_debug_console`) is
+now off by default. Only turn it on for windowed debugging.
 
 Config is read from `DDModConfig.ini`, auto-created next to `DDModCore.dll`
 on first run. In-game hotkeys (configurable in the ini):
@@ -71,7 +97,7 @@ on first run. In-game hotkeys (configurable in the ini):
 Hooks `Player_ReadControls` (`DUNGEON.DLL` + `0x871b0`, `void __cdecl(actor)`)
 with MinHook. `Hooks_Init` waits up to 120 s for `DUNGEON.DLL`, computes
 every address from the module base (the game normally loads it at
-`0x10000000`), and logs `[move] ... hook installed` to the debug console.
+`0x10000000`), and logs `[move] ... hook installed` to `DDMod.log`.
 
 Each frame the detour calls the original, then rewrites the movement part
 of the command word `*(actor+0x114)+0x144` and the turn rate at `+0x148`:
@@ -85,10 +111,17 @@ of the command word `*(actor+0x114)+0x144` and the turn rate at `+0x148`:
 2. **Read intent** with `Action_Value` (`0x1005dd00`): forward = max(1, 3),
    back = max(2, 4), left = max(9, 0xb), right = max(10, 0xc). Run = any of
    3, 4, 0xb, 0xc (that is, A held with an arrow).
-3. **Target heading** = camera yaw (`*(*(*0x101f11c0+0x10)+0x1c)`) +
-   `camera_yaw_offset` + input angle (forward 0, right +256, back 512;
-   1024 = 360 degrees). The error is the shortest signed difference to the
-   player yaw `*(*(actor+0x2c)+0x10) & 0x3ff`.
+3. **Target heading** = camera look yaw + `camera_yaw_offset` + input angle
+   (forward 0, right +256, back 512; 1024 = 360 degrees). The error is the
+   shortest signed difference to the player yaw
+   `*(*(actor+0x2c)+0x10) & 0x3ff`.
+   - Camera look yaw = camera yaw (`*(*(*0x101f11c0+0x10)+0x1c)`) **+ 512**.
+     The game writes camera yaw as `0x100 - atan2(dz, dx)` of the
+     camera-to-target vector (`0x10030790` → `0x10030730`; its atan2
+     `0x10037890(x, y)` measures from +x). Under the actor convention
+     (forward = (-sin, -cos)), that points from the player back at the
+     camera. The first in-game run confirmed this: Up walked toward the
+     camera.
 4. **Rewrite**: clear bits `2,4,8,0x10,0x20,0x40,0x100,0x200,0x800`, then:
    - *pivot*: if we didn't emit walk/run last frame and |error| is above
      `pivot_threshold_deg`, emit turn bit `2` (`4` when running) with a turn
@@ -108,22 +141,27 @@ New `DDModConfig.ini` keys (all optional; an older ini just uses defaults):
 | `max_steer_walk` | 36 | max yaw change per frame while walking (stock 12-36) |
 | `max_steer_run` | 42 | max yaw change per frame while running (stock 14-42) |
 | `pivot_threshold_deg` | 90 | if standing and the error is above this, turn on the spot first |
-| `camera_yaw_offset` | 0 | added to camera yaw; set 512 if Up walks *toward* the camera |
+| `camera_yaw_offset` | 0 | extra offset on the camera look yaw (the 180° fix is built in) |
 | `invert_steer` | 0 | set 1 if Left/Right come out mirrored |
 | `steer_with_turn_bit` | 1 | also set turn bit 2/4 while steering (see above) |
 
-With `verbose_logging = 1`, the console prints the state, camera yaw,
-target, player yaw, error, command word and rate every 30 frames. State
-changes (`passthrough`/`idle`/`pivot`/`move`) are always logged.
+With `verbose_logging = 1`, the log prints the state, camera look yaw
+(`cam`), target, player yaw, error, command word and rate every 30 frames.
+State changes (`passthrough`/`idle`/`pivot`/`move`) are always logged. Each
+line also has `posHdg`, the camera-to-player direction computed from the
+camera position (transform `[0]`,`[2]`) and the player position (CAM
+`+0xfc`/`+0x104`). It's only a cross-check and should track `cam` closely.
+`-1` means it's unavailable or the camera is nearly overhead.
 
-### Needs in-game testing (none of this has been run in the game yet)
+### Test status
 
-- The hook installs and the game doesn't crash on level load. MinHook has
-  to relocate the prologue at `0x100871b0`, which hasn't been inspected.
-- **Camera yaw convention.** The code assumes the camera transform yaw uses
-  the same "forward = (-sin, -cos)" convention as the actor. If Up walks
-  toward the camera, set `camera_yaw_offset = 512`. If it's off by 90
-  degrees, try 256 or -256.
+Run 1 (2026-10-15): the hook installed, levels loaded, and F10 toggled
+cleanly. Directions were 180° off (Up walked toward the camera), which is
+now fixed in code. Still to check:
+
+- **Camera direction.** Up should now walk away from the camera. In the
+  log, `cam` and `posHdg` should agree to within a few tens of units. If
+  they differ by about 512 or 256, the convention analysis above is wrong.
 - **Left/right sign.** The code assumes a positive rate means turning right,
   which is true for the stock TURN_RIGHT path. If left and right are
   mirrored, set `invert_steer = 1`.
@@ -168,13 +206,14 @@ directory if it isn't already there).
   function(s) at the given address(es). Takes addresses as a script arg,
   e.g. `-postScript DecompileAt.java "100a9de8,10074860"`.
 
-Run headless (no GUI) example:
+Run headless (no GUI) example. Replace the `<...>` placeholders with your
+Ghidra install, your Ghidra project folder and this repo:
 
 ```
-C:\tools\ghidra_12.1.4_PUBLIC\support\analyzeHeadless.bat ^
-  C:\dev\ghidra-projects\DD-REA DeathtrapDungeon ^
+<ghidra install>\support\analyzeHeadless.bat ^
+  <ghidra projects>\DD-REA DeathtrapDungeon ^
   -process DUNGEON.DLL -noanalysis -readOnly ^
-  -scriptPath C:\dev\DD-mod\ghidra_scripts ^
+  -scriptPath <this repo>\ghidra_scripts ^
   -postScript DecompileAt.java "100871b0"
 ```
 
