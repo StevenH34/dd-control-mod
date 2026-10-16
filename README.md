@@ -10,8 +10,8 @@ tank controls with camera-relative modern 3D controls. See
 Status: **RE done and runtime-verified (see
 `docs/RE-CONTROLS-CAMERA.md`). First hook written:
 camera-relative movement via `Player_ReadControls`. It builds but has not
-been tested in-game yet.** Camera changes come later. The "Phase 1 findings
-so far" section at the bottom is the early discovery log and is out of date.
+been tested in-game yet.** Camera changes come later. The RE discovery log,
+including the out-of-date Phase 1 findings, is in `docs/RE-FINDINGS.md`.
 
 ## Supported game version
 
@@ -41,8 +41,9 @@ game-derived RE data stays outside it:
 In the repo:
 
 - `docs/` — `RE-CONTROLS-CAMERA.md` (addresses, struct offsets, runtime
-  verification) and `PROJECT-DD-PATHC.md` (project goal, game and tool
-  paths).
+  verification), `RE-FINDINGS.md` (running log of RE findings, including
+  dead ends), `PROJECT-DD-PATHC.md` (project goal, game and tool paths),
+  `symbols.json` (Ghidra names and comments) and `rea/` (REA reports).
 - `moddll/` — `DDModCore.dll`, injected into `DD_CD.EXE`. All control-remap
   logic will live here (Phase 3+).
 - `injector/` — `DDModInjector.exe`, a small standalone tool that waits for
@@ -226,7 +227,8 @@ should save changes, such as `ImportSymbols.py`.
 
 The Phase 1 discovery scripts (`FindInputCandidates.java`,
 `ListImports.java`, `FindDirectInputUsage.java`) were removed once their
-results were recorded below. They're still in the git history.
+results were recorded in `docs/RE-FINDINGS.md`. They're still in the git
+history.
 
 ### PyGhidra (Python 3 scripts)
 
@@ -262,35 +264,3 @@ arguments:
 If the launcher picks the wrong Python, it remembers the last one it used.
 Delete the `venv` folder in your Ghidra user settings directory to make it
 ask again.
-
-## Phase 1 findings so far (static analysis only)
-
-- **No keyboard polling.** `DUNGEON.DLL` never calls `GetAsyncKeyState`,
-  `GetKeyState`, or `GetKeyboardState`.
-- **DirectInput confirmed.** `DUNGEON.DLL` imports `DirectInputCreateA`
-  (not `DirectInput8Create`/`DirectInputCreateW`). `DD_CD.EXE` imports
-  neither, so input setup lives entirely in `DUNGEON.DLL`.
-  Static xref search only finds the import thunk itself (address
-  `100a9de8`, which Ghidra couldn't fully resolve — "could not recover
-  jumptable, too many branches" — and is just a forwarding stub, not real
-  game code) — no other static caller was found. This is the expected
-  limit of static analysis here: the actual per-frame input read is a COM
-  vtable call (`IDirectInputDevice::GetDeviceState`/`GetDeviceData`), which
-  isn't a named import and won't show up in an import-xref search.
-- **Message pump is a dead end for input.** The two functions with the most
-  `PeekMessageA`/`DispatchMessageA`/`TranslateMessage` calls turned out to
-  be: `FUN_10074860` — the FMV/cutscene movie player bootstrap (references
-  `C:\Asylum\Movies\...` paths, calls `Player_InitVideoSystem` /
-  `Player_InitMovie` / etc. — this is intro-video playback, unrelated to
-  gameplay input) — and `FUN_10050ae0` — a generic idle/busy message-pump
-  helper (`WaitMessage`+`PeekMessage` loop gated on a global flag), which
-  just keeps the window responsive and is not where movement input is read.
-- **Next step needs x32dbg.** Since the real input read is an indirect
-  vtable call, find it dynamically: breakpoint `DirectInputCreateA` (x32dbg
-  resolves this fine even though Ghidra's static search couldn't find the
-  caller), step out to get the `IDirectInput7A*` return value, follow its
-  `CreateDevice` call (vtable slot) to get the `IDirectInputDevice2A*` for
-  the keyboard device, then breakpoint that device's `GetDeviceState` (or
-  `GetDeviceData`) vtable slot. Every frame's break there, with the return
-  address, is the real caller — that's the Phase 1 target function to
-  import into Ghidra and reverse for the player-transform update.
