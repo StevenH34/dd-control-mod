@@ -18,12 +18,15 @@ struct ModConfig
     int maxSteerWalk = 36;              // max yaw change per frame while walking
     int maxSteerRun = 42;               // max yaw change per frame while running
     float pivotThresholdDeg = 90.0f;    // standing + heading error above this = turn on the spot first
-    int cameraYawOffset = 0;            // added to camera yaw (use 512 if "up" walks toward the camera)
+    int cameraYawOffset = 0;            // extra offset on the camera look yaw (the 180-deg convention fix is built in)
     bool invertSteer = false;           // swap left/right if they come out mirrored
     bool steerWithTurnBit = true;       // also set cmd bit 2/4 while steering, like stock Up+Left (0xA)
 
     // Debug / iteration
-    bool showDebugConsole = true;
+    // In-game console window. Off by default: in fullscreen it steals focus
+    // and freezes the game on the loading screen. Read DDMod.log instead
+    // (DDModInjector prints it live).
+    bool showDebugConsole = false;
     bool verboseLogging = false;
 
     // Hotkey (virtual-key code) to hot-reload this file at runtime without restarting the game.

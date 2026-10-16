@@ -19,6 +19,9 @@ namespace
     constexpr uintptr_t kRvaControlsBlocked    = 0x8f920;  // int __cdecl(), returns [0x101d41c8]; the original
                                                            // returns early when nonzero (purpose not identified)
     constexpr uintptr_t kRvaCameraObject       = 0x1f11c0; // global: camera object pointer
+    constexpr uintptr_t kRvaCamCtl             = 0x1044a0; // CAM controller struct (static, not a pointer)
+    constexpr int kCamCtlPlayerX = 0xfc;   // CAM -> int* player x (read by look-at 0x10030d30)
+    constexpr int kCamCtlPlayerZ = 0x104;  // CAM -> int* player z
 
     // Actor / controller offsets
     constexpr int kActorCtl      = 0x114;  // -> controller struct
@@ -26,8 +29,16 @@ namespace
     constexpr int kCtlCommand    = 0x144;  // command bit word
     constexpr int kCtlTurnRate   = 0x148;  // turn rate (applied 1:1 to yaw while walking/running)
     constexpr int kXformYaw      = 0x10;
-    constexpr int kCamXform      = 0x10;   // camera object -> transform, yaw at dword [7]
+    constexpr int kCamXform      = 0x10;   // camera object -> transform: int x,y,z at [0..2], yaw at [7]
+    constexpr int kCamXformX     = 0x0;
+    constexpr int kCamXformZ     = 0x8;
     constexpr int kCamXformYaw   = 0x1c;
+    // Camera yaw is written by 0x10030790 as 0x100 - atan2(dz, dx) of the
+    // camera->target vector (0x10030730; the game's atan2 0x10037890 takes
+    // (x, y) and measures from +x). Under the actor convention, forward =
+    // (-sin, -cos), that yaw points from the target back at the camera, so
+    // the camera's look direction in actor yaw units is camYaw + 512.
+    constexpr int kCamYawToLookYaw = 512;
 
     // Action ids (keys.cfg order)
     enum : int
@@ -103,8 +114,28 @@ namespace
         uint8_t* xform = *reinterpret_cast<uint8_t**>(camObj + kCamXform);
         if (!xform)
             return false;
-        yawOut = *reinterpret_cast<int*>(xform + kCamXformYaw);
+        yawOut = *reinterpret_cast<int*>(xform + kCamXformYaw) + kCamYawToLookYaw;
         return true;
+    }
+
+    // Diagnostic cross-check: the camera->player direction from positions,
+    // in actor yaw units. Should match the look yaw above (up to camera
+    // lag). Returns -1 if unavailable or the camera is nearly overhead.
+    int PositionHeading()
+    {
+        uint8_t* camObj = *reinterpret_cast<uint8_t**>(g_base + kRvaCameraObject);
+        uint8_t* xform = camObj ? *reinterpret_cast<uint8_t**>(camObj + kCamXform) : nullptr;
+        uint8_t* camCtl = reinterpret_cast<uint8_t*>(g_base + kRvaCamCtl);
+        int* px = *reinterpret_cast<int**>(camCtl + kCamCtlPlayerX);
+        int* pz = *reinterpret_cast<int**>(camCtl + kCamCtlPlayerZ);
+        if (!xform || !px || !pz)
+            return -1;
+        double dx = double(*px) - *reinterpret_cast<int*>(xform + kCamXformX);
+        double dz = double(*pz) - *reinterpret_cast<int*>(xform + kCamXformZ);
+        if (dx * dx + dz * dz < 100.0 * 100.0)
+            return -1;
+        // forward = (-sin yaw, -cos yaw) = (dx, dz) / |d|
+        return static_cast<int>(std::lround(std::atan2(-dx, -dz) * 512.0 / 3.14159265358979)) & 0x3ff;
     }
 
     void SetState(MoveState s, int camYaw, int target, int yaw, int err, uint32_t cmd, int rate)
@@ -113,8 +144,9 @@ namespace
         g_lastState = s;
         if (changed || (Config_Get().verboseLogging && (g_frame % 30) == 0))
         {
-            Log("[move] %-11s cam=%4d target=%4d yaw=%4d err=%4d cmd=0x%08X rate=%d",
-                StateName(s), camYaw & 0x3ff, target & 0x3ff, yaw, err, cmd, rate);
+            int posHdg = s == MoveState::Passthrough ? -1 : PositionHeading();
+            Log("[move] %-11s cam=%4d posHdg=%4d target=%4d yaw=%4d err=%4d cmd=0x%08X rate=%d",
+                StateName(s), camYaw & 0x3ff, posHdg, target & 0x3ff, yaw, err, cmd, rate);
         }
     }
 

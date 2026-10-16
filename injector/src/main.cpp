@@ -5,38 +5,105 @@
 //
 // With no args, waits for "DD_CD.EXE" to appear and injects "DDModCore.dll"
 // from the injector's own directory. Polls every 500ms for up to 30s.
+// Instances with a debugger attached are skipped, and when one is already
+// running (other than a single plain instance) it waits for a new one.
 
 #include <windows.h>
 #include <tlhelp32.h>
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace
 {
-    DWORD FindProcessId(const std::wstring& processName)
+    std::vector<DWORD> FindProcessIds(const std::wstring& processName)
     {
+        std::vector<DWORD> pids;
         HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snapshot == INVALID_HANDLE_VALUE)
-            return 0;
+            return pids;
 
         PROCESSENTRY32W entry{};
         entry.dwSize = sizeof(entry);
 
-        DWORD pid = 0;
         if (Process32FirstW(snapshot, &entry))
         {
             do
             {
                 if (_wcsicmp(entry.szExeFile, processName.c_str()) == 0)
-                {
-                    pid = entry.th32ProcessID;
-                    break;
-                }
+                    pids.push_back(entry.th32ProcessID);
             } while (Process32NextW(snapshot, &entry));
         }
 
         CloseHandle(snapshot);
-        return pid;
+        return pids;
+    }
+
+    // A game instance held by a debugger (e.g. a leftover x32dbg session)
+    // is never the one the user wants to play.
+    bool IsBeingDebugged(DWORD pid)
+    {
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!process)
+            return false;
+        BOOL debugged = FALSE;
+        CheckRemoteDebuggerPresent(process, &debugged);
+        CloseHandle(process);
+        return debugged != FALSE;
+    }
+
+    bool Contains(const std::vector<DWORD>& pids, DWORD pid)
+    {
+        return std::find(pids.begin(), pids.end(), pid) != pids.end();
+    }
+
+    // Prints lines appended to the mod's log file until the game exits.
+    void TailLog(DWORD pid, const std::wstring& logPath)
+    {
+        HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (!process)
+            return;
+
+        LONGLONG offset = 0;
+        char buf[4096];
+        for (;;)
+        {
+            HANDLE file = CreateFileW(logPath.c_str(), GENERIC_READ,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE)
+            {
+                LARGE_INTEGER size{};
+                GetFileSizeEx(file, &size);
+                if (size.QuadPart < offset)
+                    offset = 0;  // truncated by a new run
+                LARGE_INTEGER pos{};
+                pos.QuadPart = offset;
+                SetFilePointerEx(file, pos, nullptr, FILE_BEGIN);
+                DWORD read = 0;
+                while (ReadFile(file, buf, sizeof(buf), &read, nullptr) && read > 0)
+                {
+                    fwrite(buf, 1, read, stdout);
+                    offset += read;
+                }
+                fflush(stdout);
+                CloseHandle(file);
+            }
+
+            if (WaitForSingleObject(process, 100) != WAIT_TIMEOUT)
+                break;
+        }
+        CloseHandle(process);
+    }
+
+    std::vector<DWORD> Eligible(const std::vector<DWORD>& pids)
+    {
+        std::vector<DWORD> result;
+        for (DWORD pid : pids)
+            if (!IsBeingDebugged(pid))
+                result.push_back(pid);
+        return result;
     }
 
     std::wstring GetSelfDirectory()
@@ -115,28 +182,67 @@ int wmain(int argc, wchar_t* argv[])
     std::wstring targetProcess = (argc > 1) ? argv[1] : L"DD_CD.EXE";
     std::wstring dllPath = (argc > 2) ? argv[2] : (GetSelfDirectory() + L"DDModCore.dll");
 
-    wprintf(L"DDModInjector: waiting for %s ...\n", targetProcess.c_str());
+    // Instances already running when the injector starts. If there's exactly
+    // one and no debugger is attached, inject into it right away (game
+    // launched first). Otherwise wait for a new instance to appear, so a
+    // stale or debugger-held copy never gets the mod by accident.
+    std::vector<DWORD> existing = FindProcessIds(targetProcess);
+    for (DWORD p : existing)
+        wprintf(L"Already running: %s pid %lu%s\n", targetProcess.c_str(), p,
+                IsBeingDebugged(p) ? L" (debugger attached - skipped)" : L"");
 
+    std::vector<DWORD> existingEligible = Eligible(existing);
     DWORD pid = 0;
-    for (int attempt = 0; attempt < 60; ++attempt)
+    if (existing.size() == 1 && existingEligible.size() == 1)
     {
-        pid = FindProcessId(targetProcess);
-        if (pid != 0)
-            break;
-        Sleep(500);
+        pid = existingEligible[0];
     }
-
-    if (pid == 0)
+    else
     {
-        wprintf(L"Timed out waiting for %s\n", targetProcess.c_str());
-        return 1;
+        wprintf(L"DDModInjector: waiting for a new %s ...\n", targetProcess.c_str());
+        for (int attempt = 0; attempt < 60 && pid == 0; ++attempt)
+        {
+            for (DWORD p : Eligible(FindProcessIds(targetProcess)))
+                if (!Contains(existing, p))
+                    pid = p;
+            if (pid == 0)
+                Sleep(500);
+        }
+
+        if (pid == 0)
+        {
+            if (existingEligible.size() == 1)
+            {
+                pid = existingEligible[0];
+            }
+            else if (existingEligible.size() > 1)
+            {
+                wprintf(L"Several %s instances are running and none is new. Close the extra "
+                        L"ones and try again.\n", targetProcess.c_str());
+                return 1;
+            }
+            else
+            {
+                wprintf(L"Timed out waiting for %s\n", targetProcess.c_str());
+                return 1;
+            }
+        }
     }
 
     wprintf(L"Found %s (pid %lu). Injecting %s ...\n", targetProcess.c_str(), pid, dllPath.c_str());
 
+    // The mod logs to DDMod.log next to the DLL instead of opening a window
+    // in the game. Delete the previous run's log so it isn't replayed.
+    size_t slash = dllPath.find_last_of(L"\\/");
+    std::wstring logPath = (slash == std::wstring::npos ? L"" : dllPath.substr(0, slash + 1)) + L"DDMod.log";
+    DeleteFileW(logPath.c_str());
+
     if (!InjectDll(pid, dllPath))
         return 1;
 
-    wprintf(L"Injected successfully.\n");
+    wprintf(L"Injected successfully. Showing %s until the game exits (Ctrl+C to stop).\n\n",
+            logPath.c_str());
+    TailLog(pid, logPath);
+    wprintf(L"\nGame exited.\n");
     return 0;
 }

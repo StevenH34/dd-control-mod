@@ -23,6 +23,7 @@ namespace
     {
         HMODULE self = static_cast<HMODULE>(param);
 
+        Log_OpenFile(self);
         Config_Load(self);
         const ModConfig& cfg = Config_Get();
 
