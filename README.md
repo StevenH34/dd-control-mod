@@ -50,11 +50,10 @@ In the repo:
 - `third_party/minhook/` — vendored [MinHook](https://github.com/TsudaKageyu/minhook)
   (BSD 2-clause), used for inline function hooks once target addresses are
   known.
-- `ghidra_scripts/` — Ghidra scripts to assist RE discovery. Run these from
-  Ghidra's Script Manager (or headless) against the `DUNGEON.DLL` program in
-  the `DeathtrapDungeon` Ghidra project.
-  `ApplyControlsCameraNames.java` applies the names from
-  `docs/RE-CONTROLS-CAMERA.md`.
+- `ghidra_scripts/` — Ghidra scripts for RE work. Run these from Ghidra's
+  Script Manager (or headless) against the `DUNGEON.DLL` program in the
+  `DeathtrapDungeon` Ghidra project. `ImportSymbols.py` applies the names and
+  comments in `docs/symbols.json`.
 
 ## Building
 
@@ -187,7 +186,7 @@ now fixed in code. Still to check:
 
 ## Ghidra scripts
 
-The `.java` scripts run in any Ghidra. The `.py` scripts are Python 3 and
+`DecompileAt.java` runs in any Ghidra. The `.py` scripts are Python 3 and
 need PyGhidra (see below). All of them run from the GUI Script Manager
 (Window > Script Manager > add `ghidra_scripts` as a script directory if it
 isn't already there).
@@ -205,21 +204,7 @@ isn't already there).
   SHA-256 doesn't match the program (wrong game build) unless you pass
   `force`. Together with `ExportSymbols.py`, this lets anyone with the game
   rebuild the annotated project without the Ghidra database being shared.
-- `ApplyControlsCameraNames.java` — the original hard-coded set of
-  controls/camera names from `docs/RE-CONTROLS-CAMERA.md`.
-
-- `FindInputCandidates.java` — lists all call sites of
-  `GetAsyncKeyState`/`GetKeyState`/`GetKeyboardState` and bookmarks them
-  (`DD-INPUT-CANDIDATE`). Found **zero** hits in `DUNGEON.DLL` — the game
-  does not poll the keyboard this way.
-- `ListImports.java` — dumps every imported symbol name for the active
-  program. Used to confirm `DUNGEON.DLL` imports `DirectInputCreateA` (and
-  not `DirectInput8Create`/`DirectInputCreateW`), while `DD_CD.EXE` imports
-  neither — input setup lives entirely in `DUNGEON.DLL`.
-- `FindDirectInputUsage.java` — bookmarks `DirectInputCreateA` call sites
-  (`DD-DINPUT-CANDIDATE`) and the Win32 message-pump calls
-  `PeekMessageA`/`DispatchMessageA`/`TranslateMessage`/`MapVirtualKeyA`
-  (`DD-MSGLOOP-CANDIDATE`).
+  It replaces the old hard-coded `ApplyControlsCameraNames.java`.
 - `DecompileAt.java <addr1,addr2,...>` — prints decompiled C for the
   function(s) at the given address(es). Takes addresses as a script arg,
   e.g. `-postScript DecompileAt.java "100a9de8,10074860"`.
@@ -237,8 +222,11 @@ Ghidra install, your Ghidra project folder and this repo:
 
 Headless can't open the project while the Ghidra GUI has it open (the
 `.lock` file); close the GUI first. Drop `-readOnly` for scripts that
-should save changes, such as `ApplyControlsCameraNames.java` and
-`ImportSymbols.py`.
+should save changes, such as `ImportSymbols.py`.
+
+The Phase 1 discovery scripts (`FindInputCandidates.java`,
+`ListImports.java`, `FindDirectInputUsage.java`) were removed once their
+results were recorded below. They're still in the git history.
 
 ### PyGhidra (Python 3 scripts)
 
@@ -279,7 +267,9 @@ ask again.
 
 - **No keyboard polling.** `DUNGEON.DLL` never calls `GetAsyncKeyState`,
   `GetKeyState`, or `GetKeyboardState`.
-- **DirectInput confirmed.** `DUNGEON.DLL` imports `DirectInputCreateA`.
+- **DirectInput confirmed.** `DUNGEON.DLL` imports `DirectInputCreateA`
+  (not `DirectInput8Create`/`DirectInputCreateW`). `DD_CD.EXE` imports
+  neither, so input setup lives entirely in `DUNGEON.DLL`.
   Static xref search only finds the import thunk itself (address
   `100a9de8`, which Ghidra couldn't fully resolve — "could not recover
   jumptable, too many branches" — and is just a forwarding stub, not real
